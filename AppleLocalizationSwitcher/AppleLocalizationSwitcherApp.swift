@@ -9,9 +9,19 @@ import SwiftUI
 
 @main
 struct AppleLocalizationSwitcherApp: App {
+    @StateObject private var controller = AppController()
+
+    init() {
+        NSApplication.shared.setActivationPolicy(.accessory)
+    }
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        MenuBarExtra {
+            MenuContentView()
+                .environmentObject(controller)
+        } label: {
+            Image(systemName: "globe")
         }
+        .menuBarExtraStyle(.menu)
     }
 }
