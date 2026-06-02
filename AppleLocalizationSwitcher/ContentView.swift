@@ -17,6 +17,8 @@ struct MenuContentView: View {
         Text("Input Monitoring: \(controller.inputMonitoringPermission.rawValue)")
         Text("CGEvent: \(controller.tapInstalled ? "Active" : "Inactive")")
         Text("IOHID: \(controller.hidMonitorInstalled ? "Active" : "Inactive")")
+        Text("Layout Persistence: \(controller.isLanguagePersistenceEnabled ? "On" : "Off")")
+        Text("Layout Context: \(controller.focusedApplicationName)")
         Text("Last Trigger: \(controller.lastTriggerSource)")
         Text("Last Target: \(controller.lastTargetName)")
         Text("Last Error: \(controller.lastError)")
@@ -52,6 +54,10 @@ struct MenuContentView: View {
             set: { controller.setLaunchAtLoginEnabled($0) }
         )) {
             Label("Launch at Login", systemImage: "power")
+        }
+
+        SettingsLink {
+            Label("Settings", systemImage: "gearshape")
         }
 
         Divider()

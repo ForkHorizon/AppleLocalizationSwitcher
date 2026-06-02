@@ -26,9 +26,15 @@ struct AppleLocalizationSwitcherApp: App {
             MenuContentView()
                 .environmentObject(controller)
         } label: {
-            Image(systemName: "globe")
+            Image("StatusBarAppIcon")
+                .renderingMode(.template)
         }
         .menuBarExtraStyle(.menu)
+
+        Settings {
+            SettingsView()
+                .environmentObject(controller)
+        }
     }
 
     private static func hasExistingInstance() -> Bool {
@@ -50,7 +56,7 @@ private enum SingleInstanceGuard {
     private static var lockFileDescriptor: Int32 = -1
 
     static func acquire() -> Bool {
-        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "AppleLocalizationSwitcher"
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "FnSwitcher"
         let lockPath = (NSTemporaryDirectory() as NSString).appendingPathComponent("\(bundleIdentifier).lock")
         let fileDescriptor = open(lockPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
 

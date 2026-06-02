@@ -18,6 +18,11 @@ enum GlobeKeyEventSource: String {
     case menu = "Menu"
 }
 
+private enum InputSourceApplyReason {
+    case userSwitch
+    case languagePersistenceRestore
+}
+
 @MainActor
 final class AppController: ObservableObject {
     @Published private(set) var inputSources: [KeyboardInputSource] = []
@@ -32,8 +37,14 @@ final class AppController: ObservableObject {
     @Published private(set) var lastError = "None"
     @Published private(set) var diagnostics: [String] = []
     @Published var isSwitcherEnabled: Bool
+    @Published var isLanguagePersistenceEnabled: Bool
+    @Published private(set) var languagePersistenceApplications: [LanguagePersistenceApplication] = []
+    @Published private(set) var focusedApplicationName = "Global Default"
+    @Published private(set) var globalDefaultSourceName = "Not Set"
 
     private let inputSourceService = InputSourceService()
+    private let languagePersistenceStore: LanguagePersistenceStore
+    private let languageSwitchFeedbackController = LanguageSwitchFeedbackController()
     private lazy var eventTap = FnEventTap { [weak self] detail in
         self?.handleGlobeKeyPress(from: .cgEvent, detail: detail)
     }
@@ -43,8 +54,11 @@ final class AppController: ObservableObject {
     private var permissionTimer: Timer?
     private var launchPermissionRequestTask: Task<Void, Never>?
     private var notificationTokens: [NSObjectProtocol] = []
+    private var workspaceNotificationTokens: [NSObjectProtocol] = []
     private var pendingCGFallbackTask: Task<Void, Never>?
     private var reapplyTasks: [Task<Void, Never>] = []
+    private var inputSourceSuppressionTasks: [Task<Void, Never>] = []
+    private var inputSourceNotificationSuppressions: [String: Int] = [:]
     private var lastCommittedGlobePressTime: TimeInterval = 0
     private var lastCommittedGlobePressSource: GlobeKeyEventSource?
     private var switchGeneration = 0
@@ -84,7 +98,7 @@ final class AppController: ObservableObject {
 
     var diagnosticsText: String {
         """
-        AppleLocalizationSwitcher Diagnostics
+        FnSwitcher Diagnostics
         Current Source: \(currentSourceName)
         Enabled Sources: \(inputSources.map(\.name).joined(separator: ", "))
         Fn Switcher Enabled: \(isSwitcherEnabled)
@@ -92,6 +106,9 @@ final class AppController: ObservableObject {
         Input Monitoring: \(inputMonitoringPermission.rawValue)
         CGEvent Monitor: \(tapInstalled ? "Active" : "Inactive")
         IOHID Monitor: \(hidMonitorInstalled ? "Active" : "Inactive")
+        Language Persistence: \(isLanguagePersistenceEnabled ? "Enabled" : "Disabled")
+        Focused App Context: \(focusedApplicationName)
+        Global Default Source: \(globalDefaultSourceName)
         Last Trigger: \(lastTriggerSource)
         Last Target: \(lastTargetName)
         Last Error: \(lastError)
@@ -101,12 +118,18 @@ final class AppController: ObservableObject {
     }
 
     init() {
+        let languagePersistenceStore = LanguagePersistenceStore()
+        self.languagePersistenceStore = languagePersistenceStore
         isSwitcherEnabled = UserDefaults.standard.object(forKey: DefaultsKey.switcherEnabled) as? Bool ?? true
+        isLanguagePersistenceEnabled = languagePersistenceStore.isEnabled
         refreshAccessibilityTrust()
         refreshInputMonitoringPermission()
         refreshInputSources()
         refreshLaunchAtLoginStatus()
+        refreshLanguagePersistenceApplications()
+        refreshFocusedApplicationForLanguagePersistence(applyLayout: false)
         observeInputSourceChanges()
+        observeApplicationChanges()
         startPermissionPolling()
         configureMonitors()
         requestMissingKeyboardPermissionsOnLaunch()
@@ -119,8 +142,11 @@ final class AppController: ObservableObject {
         launchPermissionRequestTask?.cancel()
         pendingCGFallbackTask?.cancel()
         reapplyTasks.forEach { $0.cancel() }
+        inputSourceSuppressionTasks.forEach { $0.cancel() }
+        languageSwitchFeedbackController.close()
         permissionTimer?.invalidate()
         notificationTokens.forEach { DistributedNotificationCenter.default().removeObserver($0) }
+        workspaceNotificationTokens.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
     }
 
     func setSwitcherEnabled(_ enabled: Bool) {
@@ -132,6 +158,48 @@ final class AppController: ObservableObject {
         } else {
             configureMonitors()
         }
+    }
+
+    func setLanguagePersistenceEnabled(_ enabled: Bool) {
+        languagePersistenceStore.setEnabled(enabled)
+        isLanguagePersistenceEnabled = enabled
+
+        if let currentInputSourceID = currentInputSource?.id {
+            languagePersistenceStore.initializeGlobalDefaultIfNeeded(currentInputSourceID: currentInputSourceID)
+        }
+
+        publishLanguagePersistenceState()
+
+        if enabled {
+            lastActionMessage = "Language persistence enabled"
+            restoreLanguageLayoutForCurrentFocus(reason: "language persistence enabled")
+        } else {
+            cancelPendingLanguageRestores()
+            lastActionMessage = "Language persistence disabled"
+        }
+    }
+
+    func setRememberLanguageLayout(for bundleIdentifier: String, enabled: Bool) {
+        languagePersistenceStore.setRememberLayout(for: bundleIdentifier, enabled: enabled)
+
+        if languagePersistenceStore.focusedApplication?.bundleIdentifier == bundleIdentifier,
+           let currentInputSourceID = currentInputSource?.id {
+            languagePersistenceStore.recordSelectedInputSourceID(currentInputSourceID)
+        }
+
+        publishLanguagePersistenceState()
+
+        if languagePersistenceStore.isEnabled {
+            restoreLanguageLayoutForCurrentFocus(reason: "per-app setting changed")
+        }
+    }
+
+    func refreshLanguagePersistenceApplications() {
+        languagePersistenceStore.refreshRunningApplications(
+            NSWorkspace.shared.runningApplications,
+            ownBundleIdentifier: Bundle.main.bundleIdentifier
+        )
+        publishLanguagePersistenceState()
     }
 
     func setLaunchAtLoginEnabled(_ enabled: Bool) {
@@ -170,7 +238,14 @@ final class AppController: ObservableObject {
 
     func refreshInputSources() {
         inputSources = inputSourceService.enabledSelectableKeyboardInputSources()
+        languagePersistenceStore.updateInputSources(inputSources)
         refreshCurrentInputSource()
+
+        if let currentInputSourceID = currentInputSource?.id {
+            languagePersistenceStore.initializeGlobalDefaultIfNeeded(currentInputSourceID: currentInputSourceID)
+        }
+
+        publishLanguagePersistenceState()
         configureMonitors()
     }
 
@@ -223,6 +298,7 @@ final class AppController: ObservableObject {
     }
 
     private func performCoordinatedSwitch(trigger: GlobeKeyEventSource, detail: String) {
+        cancelPendingLanguageRestores()
         refreshCurrentInputSource()
 
         guard inputSources.count >= 2 else {
@@ -252,7 +328,13 @@ final class AppController: ObservableObject {
         lastError = "None"
         appendDiagnostic("Switch target=\(nextSource.name) trigger=\(trigger.rawValue) detail=\(detail)")
 
-        apply(target: nextSource, phase: "initial", generation: generation)
+        apply(
+            target: nextSource,
+            phase: "initial",
+            generation: generation,
+            reason: .userSwitch,
+            showsFeedback: true
+        )
 
         for delay in [0.08, 0.18, 0.35] {
             let task = Task { @MainActor [weak self, nextSource] in
@@ -266,7 +348,13 @@ final class AppController: ObservableObject {
                     return
                 }
 
-                self?.apply(target: nextSource, phase: "\(Int(delay * 1000))ms reapply", generation: generation)
+                self?.apply(
+                    target: nextSource,
+                    phase: "\(Int(delay * 1000))ms reapply",
+                    generation: generation,
+                    reason: .userSwitch,
+                    showsFeedback: false
+                )
             }
             reapplyTasks.append(task)
         }
@@ -274,18 +362,44 @@ final class AppController: ObservableObject {
         configureMonitors()
     }
 
-    private func apply(target: KeyboardInputSource, phase: String, generation: Int) {
+    private func apply(
+        target: KeyboardInputSource,
+        phase: String,
+        generation: Int,
+        reason: InputSourceApplyReason,
+        showsFeedback: Bool
+    ) {
         guard generation == switchGeneration else {
             return
+        }
+
+        if reason == .languagePersistenceRestore {
+            suppressNextInputSourceChangeNotification(for: target.id)
         }
 
         let status = inputSourceService.select(target)
 
         if status == noErr {
             currentInputSource = target
-            lastActionMessage = "Switched to \(target.name)"
+
+            switch reason {
+            case .userSwitch:
+                languagePersistenceStore.recordSelectedInputSourceID(target.id)
+                publishLanguagePersistenceState()
+                lastActionMessage = "Switched to \(target.name)"
+                if showsFeedback {
+                    languageSwitchFeedbackController.show(inputSources: inputSources, selectedInputSource: target)
+                }
+            case .languagePersistenceRestore:
+                lastActionMessage = "Applied \(target.name) for \(focusedApplicationName)"
+            }
+
             appendDiagnostic("\(phase): selected \(target.name)")
         } else {
+            if reason == .languagePersistenceRestore {
+                consumeSuppressedInputSourceChangeNotification(for: target.id)
+            }
+
             lastError = "Switch failed (\(status))"
             lastActionMessage = lastError
             appendDiagnostic("\(phase): \(lastError)")
@@ -447,7 +561,7 @@ final class AppController: ObservableObject {
 
         notificationTokens.append(center.addObserver(forName: selectedName, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refreshCurrentInputSource()
+                self?.handleSelectedInputSourceChanged()
             }
         })
 
@@ -456,6 +570,171 @@ final class AppController: ObservableObject {
                 self?.refreshInputSources()
             }
         })
+    }
+
+    private func observeApplicationChanges() {
+        let center = NSWorkspace.shared.notificationCenter
+
+        workspaceNotificationTokens.append(center.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            Task { @MainActor [weak self, application] in
+                self?.handleActivatedApplication(application)
+            }
+        })
+
+        workspaceNotificationTokens.append(center.addObserver(
+            forName: NSWorkspace.didDeactivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: 80_000_000)
+                } catch {
+                    return
+                }
+
+                guard NSWorkspace.shared.frontmostApplication == nil else {
+                    return
+                }
+
+                self?.languagePersistenceStore.focus(application: nil, ownBundleIdentifier: Bundle.main.bundleIdentifier)
+                self?.publishLanguagePersistenceState()
+                self?.restoreLanguageLayoutForCurrentFocus(reason: "no focused app")
+            }
+        })
+
+        workspaceNotificationTokens.append(center.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshLanguagePersistenceApplications()
+                self?.refreshFocusedApplicationForLanguagePersistence(applyLayout: true)
+            }
+        })
+    }
+
+    private func handleSelectedInputSourceChanged() {
+        refreshCurrentInputSource()
+
+        guard let currentInputSourceID = currentInputSource?.id else {
+            publishLanguagePersistenceState()
+            return
+        }
+
+        if consumeSuppressedInputSourceChangeNotification(for: currentInputSourceID) {
+            appendDiagnostic("Ignored persistence restore input-source notification for \(currentInputSourceID)")
+            publishLanguagePersistenceState()
+            return
+        }
+
+        languagePersistenceStore.recordSelectedInputSourceID(currentInputSourceID)
+        publishLanguagePersistenceState()
+    }
+
+    private func handleActivatedApplication(_ application: NSRunningApplication?) {
+        languagePersistenceStore.focus(application: application, ownBundleIdentifier: Bundle.main.bundleIdentifier)
+        refreshLanguagePersistenceApplications()
+        publishLanguagePersistenceState()
+        restoreLanguageLayoutForCurrentFocus(reason: "app activated")
+    }
+
+    private func refreshFocusedApplicationForLanguagePersistence(applyLayout: Bool) {
+        languagePersistenceStore.focus(
+            application: NSWorkspace.shared.frontmostApplication,
+            ownBundleIdentifier: Bundle.main.bundleIdentifier
+        )
+        publishLanguagePersistenceState()
+
+        if applyLayout {
+            restoreLanguageLayoutForCurrentFocus(reason: "focused app refreshed")
+        }
+    }
+
+    private func restoreLanguageLayoutForCurrentFocus(reason: String) {
+        guard languagePersistenceStore.isEnabled else {
+            return
+        }
+
+        refreshCurrentInputSource()
+
+        guard let targetInputSourceID = languagePersistenceStore.targetInputSourceID(currentInputSourceID: currentInputSource?.id),
+              let targetInputSource = inputSources.first(where: { $0.id == targetInputSourceID }) else {
+            publishLanguagePersistenceState()
+            return
+        }
+
+        guard currentInputSource?.id != targetInputSource.id else {
+            appendDiagnostic("Persistence restore skipped: already using \(targetInputSource.name) for \(focusedApplicationName)")
+            publishLanguagePersistenceState()
+            return
+        }
+
+        cancelPendingLanguageRestores()
+        switchGeneration += 1
+        let generation = switchGeneration
+
+        lastTriggerSource = "App Focus"
+        lastTargetName = targetInputSource.name
+        lastError = "None"
+        appendDiagnostic("Persistence restore target=\(targetInputSource.name) context=\(focusedApplicationName) reason=\(reason)")
+
+        apply(
+            target: targetInputSource,
+            phase: "persistence restore",
+            generation: generation,
+            reason: .languagePersistenceRestore,
+            showsFeedback: false
+        )
+    }
+
+    private func publishLanguagePersistenceState() {
+        isLanguagePersistenceEnabled = languagePersistenceStore.isEnabled
+        languagePersistenceApplications = languagePersistenceStore.applications
+        focusedApplicationName = languagePersistenceStore.focusedApplicationName
+        globalDefaultSourceName = languagePersistenceStore.globalDefaultInputSourceName
+    }
+
+    private func cancelPendingLanguageRestores() {
+        reapplyTasks.forEach { $0.cancel() }
+        reapplyTasks.removeAll()
+    }
+
+    private func suppressNextInputSourceChangeNotification(for inputSourceID: String) {
+        inputSourceNotificationSuppressions[inputSourceID, default: 0] += 1
+
+        let task = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 700_000_000)
+            } catch {
+                return
+            }
+
+            _ = self?.consumeSuppressedInputSourceChangeNotification(for: inputSourceID)
+        }
+
+        inputSourceSuppressionTasks.append(task)
+    }
+
+    @discardableResult
+    private func consumeSuppressedInputSourceChangeNotification(for inputSourceID: String) -> Bool {
+        guard let count = inputSourceNotificationSuppressions[inputSourceID], count > 0 else {
+            return false
+        }
+
+        if count == 1 {
+            inputSourceNotificationSuppressions[inputSourceID] = nil
+        } else {
+            inputSourceNotificationSuppressions[inputSourceID] = count - 1
+        }
+
+        return true
     }
 
     private func startPermissionPolling() {
