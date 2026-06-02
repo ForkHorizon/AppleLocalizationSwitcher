@@ -16,73 +16,103 @@ final class LanguageSwitchFeedbackContentModel: ObservableObject {
 }
 
 struct LanguageSwitchFeedbackView: View {
+    private static let itemWidth: CGFloat = 36
+    private static let itemHeight: CGFloat = 36
+    private static let containerHeight: CGFloat = 40
+    private static let itemCornerRadius: CGFloat = 20
+    private static let activeBackground = Color(red: 0.05, green: 0.05, blue: 0.05)
+    private static let inactiveBackground = Color.white
+
     @ObservedObject var model: LanguageSwitchFeedbackContentModel
     @Namespace private var glassNamespace
 
     var body: some View {
         let snapshot = model.snapshot
 
-        GlassEffectContainer(spacing: 10) {
-            VStack(spacing: 14) {
-                Text(snapshot.selectedSourceName)
-                    .font(.system(size: 26, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.62)
-                    .frame(maxWidth: .infinity)
-
-                HStack(spacing: 8) {
-                    ForEach(snapshot.sources) { source in
-                        sourceChip(source, selectedSourceID: snapshot.selectedSourceID)
-                    }
+        GlassEffectContainer(spacing: 2) {
+            HStack(spacing: 2) {
+                ForEach(snapshot.displayedSources) { source in
+                    sourceChip(source, selectedSourceID: snapshot.selectedSourceID)
                 }
-                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .glassEffect(.regular.interactive(false), in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+            .padding(2)
+            .frame(width: snapshot.panelSize.width, height: Self.containerHeight)
+            .background(Self.inactiveBackground)
+            .clipShape(Capsule())
+            .glassEffect(.regular.interactive(false), in: Capsule())
             .glassEffectTransition(.materialize)
         }
-        .padding(10)
-        .frame(width: 430, height: 132)
+        .frame(width: snapshot.panelSize.width, height: snapshot.panelSize.height)
         .animation(.smooth(duration: 0.16), value: snapshot)
     }
 
     private func sourceChip(_ source: LanguageSwitchFeedbackItem, selectedSourceID: String) -> some View {
         let isSelected = source.id == selectedSourceID
 
-        return Text(abbreviation(for: source.name))
-            .font(.system(size: 14, weight: isSelected ? .semibold : .medium, design: .rounded))
-            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        return Text(shortLanguageCode(for: source))
+            .font(.system(size: 12, weight: .black, design: .monospaced))
+            .foregroundStyle(isSelected ? Color.white : Self.activeBackground)
             .lineLimit(1)
             .minimumScaleFactor(0.7)
-            .frame(width: 42, height: 34)
-            .glassEffect(chipGlass(selected: isSelected), in: Capsule())
+            .frame(width: Self.itemWidth, height: Self.itemHeight)
+            .background(isSelected ? Self.activeBackground : Self.inactiveBackground)
+            .clipShape(RoundedRectangle(cornerRadius: Self.itemCornerRadius, style: .continuous))
             .glassEffectID(source.id, in: glassNamespace)
             .accessibilityLabel(source.name)
     }
 
-    private func chipGlass(selected: Bool) -> Glass {
-        if selected {
-            return Glass.regular.tint(Color.accentColor.opacity(0.24)).interactive(false)
+    private func shortLanguageCode(for source: LanguageSwitchFeedbackItem) -> String {
+        let searchableText = "\(source.name) \(source.id)"
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+
+        let knownCodes: [(token: String, code: String)] = [
+            ("russian", "Ru"),
+            ("russk", "Ru"),
+            ("spanish", "Es"),
+            ("espan", "Es"),
+            ("abc", "En"),
+            ("u.s", "En"),
+            (" us", "En"),
+            ("english", "En"),
+            ("british", "En"),
+            ("ukrainian", "Uk"),
+            ("french", "Fr"),
+            ("german", "De"),
+            ("italian", "It"),
+            ("portuguese", "Pt"),
+            ("polish", "Pl"),
+            ("turkish", "Tr"),
+            ("hebrew", "He"),
+            ("arabic", "Ar"),
+            ("chinese", "Zh"),
+            ("pinyin", "Zh"),
+            ("japanese", "Ja"),
+            ("korean", "Ko")
+        ]
+
+        if let code = knownCodes.first(where: { searchableText.contains($0.token) })?.code {
+            return code
         }
 
-        return Glass.clear.interactive(false)
+        return fallbackCode(for: source.name)
     }
 
-    private func abbreviation(for name: String) -> String {
+    private func fallbackCode(for name: String) -> String {
         let words = name
             .split { character in
                 character == " " || character == "-" || character == "_" || character == "."
             }
             .filter { !$0.isEmpty }
 
-        let initials = words.prefix(2).compactMap(\.first)
-        if !initials.isEmpty {
-            return String(initials).uppercased()
+        let token = words.first.map(String.init) ?? name
+        let prefix = String(token.prefix(2))
+
+        guard let first = prefix.first else {
+            return "??"
         }
 
-        return String(name.prefix(2)).uppercased()
+        let second = prefix.dropFirst().lowercased()
+        return String(first).uppercased() + second
     }
 }

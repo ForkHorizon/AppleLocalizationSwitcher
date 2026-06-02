@@ -12,11 +12,37 @@ struct LanguageSwitchFeedbackItem: Identifiable, Equatable {
 }
 
 struct LanguageSwitchFeedbackSnapshot: Equatable {
+    private static let itemWidth: CGFloat = 36
+    private static let itemSpacing: CGFloat = 2
+    private static let horizontalPadding: CGFloat = 4
+    private static let panelHeight: CGFloat = 40
+
     let sources: [LanguageSwitchFeedbackItem]
     let selectedSourceID: String
 
     var selectedSourceName: String {
         sources.first { $0.id == selectedSourceID }?.name ?? "Unknown"
+    }
+
+    var displayedSources: [LanguageSwitchFeedbackItem] {
+        if sources.count <= 4 {
+            return sources
+        }
+
+        guard let selectedIndex = sources.firstIndex(where: { $0.id == selectedSourceID }),
+              selectedIndex >= 4 else {
+            return Array(sources.prefix(4))
+        }
+
+        return Array(sources.prefix(3)) + [sources[selectedIndex]]
+    }
+
+    var panelSize: NSSize {
+        let count = max(displayedSources.count, 1)
+        let width = Self.horizontalPadding
+            + CGFloat(count) * Self.itemWidth
+            + CGFloat(max(count - 1, 0)) * Self.itemSpacing
+        return NSSize(width: width, height: Self.panelHeight)
     }
 }
 
@@ -29,7 +55,6 @@ final class LanguageSwitchFeedbackController {
         case hiding
     }
 
-    private static let panelSize = NSSize(width: 430, height: 132)
     private static let visibleDuration: UInt64 = 900_000_000
     private static let fadeInDuration = 0.12
     private static let fadeOutDuration = 0.18
@@ -71,9 +96,9 @@ final class LanguageSwitchFeedbackController {
         animationTask = nil
 
         let model = resolvedContentModel(for: snapshot)
-        let panel = resolvedPanel(with: model)
+        let panel = resolvedPanel(with: model, size: snapshot.panelSize)
         model.snapshot = snapshot
-        position(panel)
+        position(panel, size: snapshot.panelSize)
 
         switch state {
         case .hidden:
@@ -106,13 +131,16 @@ final class LanguageSwitchFeedbackController {
         return contentModel
     }
 
-    private func resolvedPanel(with model: LanguageSwitchFeedbackContentModel) -> LanguageSwitchFeedbackPanel {
+    private func resolvedPanel(
+        with model: LanguageSwitchFeedbackContentModel,
+        size: NSSize
+    ) -> LanguageSwitchFeedbackPanel {
         if let panel {
             return panel
         }
 
         let panel = LanguageSwitchFeedbackPanel(
-            contentRect: NSRect(origin: .zero, size: Self.panelSize),
+            contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -127,8 +155,8 @@ final class LanguageSwitchFeedbackController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.alphaValue = 0
 
-        let visualEffectView = LanguageSwitchVisualEffectView(frame: NSRect(origin: .zero, size: Self.panelSize))
-        visualEffectView.translatesAutoresizingMaskIntoConstraints = false
+        let visualEffectView = LanguageSwitchVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        visualEffectView.autoresizingMask = [.width, .height]
         visualEffectView.material = .hudWindow
         visualEffectView.blendingMode = .behindWindow
         visualEffectView.state = .active
@@ -152,17 +180,17 @@ final class LanguageSwitchFeedbackController {
         return panel
     }
 
-    private func position(_ panel: NSPanel) {
+    private func position(_ panel: NSPanel, size: NSSize) {
         guard let screen = screenForPresentation() else {
             return
         }
 
         let visibleFrame = screen.visibleFrame
         let origin = NSPoint(
-            x: visibleFrame.midX - Self.panelSize.width / 2,
-            y: visibleFrame.midY - Self.panelSize.height / 2
+            x: visibleFrame.midX - size.width / 2,
+            y: visibleFrame.midY - size.height / 2
         )
-        panel.setFrame(NSRect(origin: origin, size: Self.panelSize), display: true)
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
     }
 
     private func screenForPresentation() -> NSScreen? {
@@ -265,12 +293,12 @@ private final class LanguageSwitchVisualEffectView: NSVisualEffectView {
 
     override func layout() {
         super.layout()
-        layer?.cornerRadius = 34
+        layer?.cornerRadius = bounds.height / 2
     }
 
     private func configure() {
         wantsLayer = true
-        layer?.cornerRadius = 34
+        layer?.cornerRadius = 20
         layer?.masksToBounds = true
     }
 }
