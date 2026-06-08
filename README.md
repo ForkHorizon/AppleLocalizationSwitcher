@@ -4,11 +4,23 @@ FnSwitcher is a macOS menu bar utility that makes switching keyboard input sourc
 
 macOS can sometimes miss the first Globe/Fn press when switching languages, requiring a second or third press. This app listens for a standalone Globe/Fn key press, suppresses the unreliable default handling, and switches directly to the next enabled keyboard input source.
 
+## Status
+
+Public utility release. The app is usable, but the repository still uses the original Xcode project name `AppleLocalizationSwitcher` internally.
+
+## Screenshot / Demo
+
+The repository currently includes the app icon used for public presentation:
+
+![FnSwitcher app icon](app-icon-upd.png)
+
+A menu bar screenshot/GIF is planned for a future documentation update.
+
 ## Install
 
 Download the latest DMG from the GitHub release:
 
-[FnSwitcher 1.5](https://github.com/ForkHorizon/AppleLocalizationSwitcher/releases/tag/v1.5)
+[FnSwitcher 1.5](https://github.com/ForkHorizon/FnSwitcher/releases/tag/v1.5)
 
 DMG SHA-256:
 
@@ -53,3 +65,7 @@ xcodebuild -project AppleLocalizationSwitcher.xcodeproj -scheme AppleLocalizatio
 ```
 
 The app is intended as a local macOS utility and is not sandboxed, because global keyboard event handling requires system-level permission.
+
+## License
+
+No open-source license has been declared yet. Until a license file is added, the public source should be treated as visible reference code rather than reusable licensed software.
