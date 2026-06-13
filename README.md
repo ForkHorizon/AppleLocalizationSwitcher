@@ -17,7 +17,7 @@ Download the latest DMG from the GitHub release:
 DMG SHA-256:
 
 ```text
-5a915e8b9587ce52fd7aaf26db8dbae7285914cedf57f9984e0770521287fb24
+380ee906910eaf6c671e9199f8a10cf727258d64f9e36e4ef26cf52280594058
 ```
 
 Open the DMG, drag `FnSwitcher.app` into `Applications`, then launch it.
