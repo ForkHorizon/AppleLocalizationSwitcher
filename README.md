@@ -8,24 +8,16 @@ macOS can sometimes miss the first Globe/Fn press when switching languages, requ
 
 Public utility release. The app is usable, but the repository still uses the original Xcode project name `AppleLocalizationSwitcher` internally.
 
-## Screenshot / Demo
-
-The repository currently includes the app icon used for public presentation:
-
-![FnSwitcher app icon](app-icon-upd.png)
-
-A menu bar screenshot/GIF is planned for a future documentation update.
-
 ## Install
 
 Download the latest DMG from the GitHub release:
 
-[FnSwitcher 1.5](https://github.com/ForkHorizon/FnSwitcher/releases/tag/v1.5)
+[FnSwitcher 1.6](https://github.com/ForkHorizon/FnSwitcher/releases/tag/v1.6)
 
 DMG SHA-256:
 
 ```text
-1e0fae4daaa9e339fd4bda0892a65ca988bcdbe40510bcf03dc61fa345e32f0f
+5a915e8b9587ce52fd7aaf26db8dbae7285914cedf57f9984e0770521287fb24
 ```
 
 Open the DMG, drag `FnSwitcher.app` into `Applications`, then launch it.
